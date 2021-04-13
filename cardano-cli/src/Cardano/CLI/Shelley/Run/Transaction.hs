@@ -3,6 +3,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeApplications #-}
 
 {-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
 
@@ -921,13 +922,16 @@ runTxGetTxId txfile = do
 
 runTxView :: InputTxFile -> ExceptT ShelleyTxCmdError IO ()
 runTxView txfile = do
-  InAnyCardanoEra era txbody <-
+  InAnyCardanoEra _era txbody <-
     case txfile of
       InputTxBodyFile (TxBodyFile txbodyFile) -> readFileTxBody txbodyFile
       InputTxFile (TxFile txFile) -> do
         InAnyCardanoEra era tx <- readFileTx txFile
         return . InAnyCardanoEra era $ getTxBody tx
-  liftIO $ BS.putStr $ friendlyTxBodyBS era txbody
+  liftIO $
+    case friendlyTxBodyBS txbody of
+      Right text -> BS.putStr text
+      Left err   -> die $ toS err
 
 runTxCreateWitness
   :: TxBodyFile

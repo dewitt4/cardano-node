@@ -11,156 +11,159 @@
 module Cardano.CLI.Run.Friendly (friendlyTxBodyBS) where
 
 import           Cardano.Prelude
+import qualified Prelude
 
-import           Data.Aeson (Object, Value (..), object, toJSON, (.=))
+import           Data.Aeson (Object, ToJSON, Value (..), object, toJSON, (.=))
 import qualified Data.HashMap.Strict as HashMap
+import qualified Data.Map.Strict as Map
+import           Data.Yaml (array)
 import           Data.Yaml.Pretty (defConfig, encodePretty, setConfCompare)
 
 import           Cardano.Api as Api (AddressInEra (..),
-                   AddressTypeInEra (ByronAddressInAnyEra, ShelleyAddressInEra), CardanoEra,
+                   AddressTypeInEra (ByronAddressInAnyEra, ShelleyAddressInEra),
+                   CardanoEra (ShelleyEra), IsCardanoEra (cardanoEra),
                    ShelleyBasedEra (ShelleyBasedEraAllegra, ShelleyBasedEraMary, ShelleyBasedEraShelley),
-                   ShelleyEra, TxBody, serialiseAddress)
-import           Cardano.Api.Byron (TxBody (ByronTxBody))
-import           Cardano.Api.Shelley (TxBody (ShelleyTxBody), fromShelleyAddr)
-import           Cardano.Binary (Annotated)
-import qualified Cardano.Chain.UTxO as Byron
-import           Cardano.Ledger.Shelley as Ledger (ShelleyEra)
-import           Cardano.Ledger.ShelleyMA (MaryOrAllegra (Allegra, Mary), ShelleyMAEra)
-import qualified Cardano.Ledger.ShelleyMA.TxBody as ShelleyMA
-import           Ouroboros.Consensus.Shelley.Protocol.Crypto (StandardCrypto)
-import           Shelley.Spec.Ledger.API (Addr (..), TxOut (TxOut))
+                   ShelleyEra, TxAuxScripts (..), TxBody, TxBodyContent (..), TxCertificates (..),
+                   TxFee (..), TxMetadata (..), TxMetadataInEra (..), TxMetadataValue (..),
+                   TxMintValue (..), TxOut (..), TxOutValue (..), TxUpdateProposal (..),
+                   TxValidityLowerBound (..), TxValidityUpperBound (..), TxWithdrawals (..),
+                   ValidityUpperBoundSupportedInEra (ValidityUpperBoundInShelleyEra),
+                   auxScriptsSupportedInEra, certificatesSupportedInEra, displayError,
+                   getTransactionBodyContent, multiAssetSupportedInEra, serialiseAddress,
+                   serialiseAddressForTxOut, txMetadataSupportedInEra, updateProposalSupportedInEra,
+                   validityLowerBoundSupportedInEra, validityUpperBoundSupportedInEra,
+                   withdrawalsSupportedInEra)
+import           Cardano.Api.Byron (Lovelace (..))
+import           Cardano.Api.Shelley (Address (ShelleyAddress), StakeAddress (..),
+                   TxBody (ShelleyTxBody), fromShelleyAddr, fromShelleyStakeAddr)
 import qualified Shelley.Spec.Ledger.API as Shelley
 
 import           Cardano.CLI.Helpers (textShow)
 
-friendlyTxBodyBS :: CardanoEra era -> Api.TxBody era -> ByteString
-friendlyTxBodyBS era =
-  encodePretty (setConfCompare compare defConfig) . friendlyTxBody era
+friendlyTxBodyBS
+  :: IsCardanoEra era => Api.TxBody era -> Either Prelude.String ByteString
+friendlyTxBodyBS =
+  fmap (encodePretty $ setConfCompare compare defConfig) . friendlyTxBody
 
-friendlyTxBody :: CardanoEra era -> Api.TxBody era -> Value
-friendlyTxBody era txbody =
-  Object $
-    HashMap.fromList ["era" .= toJSON era]
-    <>
-    case txbody of
-      ByronTxBody body -> friendlyTxBodyByron body
-      ShelleyTxBody ShelleyBasedEraShelley body _scripts aux ->
-        addAuxData aux $ friendlyTxBodyShelley body
-      ShelleyTxBody ShelleyBasedEraAllegra body _scripts aux ->
-        addAuxData aux $ friendlyTxBodyAllegra body
-      ShelleyTxBody ShelleyBasedEraMary body _scripts aux ->
-        addAuxData aux $ friendlyTxBodyMary body
+friendlyTxBody
+  :: forall era
+  .  IsCardanoEra era => Api.TxBody era -> Either Prelude.String Value
+friendlyTxBody txbody =
+  case getTransactionBodyContent txbody of
+    Right
+      TxBodyContent
+        { txIns
+        , txOuts
+        , txFee
+        , txValidityRange
+        , txMetadata
+        , txAuxScripts
+        , txWithdrawals
+        , txCertificates
+        , txUpdateProposal
+        , txMintValue
+        } ->
+      Right $
+      object
+        $   [ "era"     .= era
+            , "fee"     .= friendlyFee txFee
+            , "inputs"  .= txIns
+            , "outputs" .= map friendlyTxOut txOuts
+            ]
+        ++  [ "auxiliary scripts" .= friendlyAuxScripts txAuxScripts
+            | Just _ <- [auxScriptsSupportedInEra era]
+            ]
+        ++  [ "certificates" .= friendlyCertificates txCertificates
+            | Just _ <- [certificatesSupportedInEra era]
+            ]
+        ++  [ "metadata" .= friendlyMetadata txMetadata
+            | Just _ <- [txMetadataSupportedInEra era]
+            ]
+        ++  [ "mint" .= friendlyMintValue txMintValue
+            | Right _ <- [multiAssetSupportedInEra era]
+            ]
+        ++  [ "update proposal" .= friendlyUpdateProposal txUpdateProposal
+            | Just _ <- [updateProposalSupportedInEra era]
+            ]
+        ++  friendlyValidityRange txValidityRange
+        ++  [ "withdrawals" .= friendlyWithdrawals txWithdrawals
+            | Just _ <- [withdrawalsSupportedInEra era]
+            ]
+    Left err -> Left $ displayError err
+  where
+    era = cardanoEra @era
 
-addAuxData :: Show a => Maybe a -> Object -> Object
-addAuxData = HashMap.insert "auxiliary data" . maybe Null (toJSON . textShow)
+friendlyValidityRange
+  :: forall era
+  .  IsCardanoEra era
+  => (TxValidityLowerBound era, TxValidityUpperBound era) -> [(Text, Value)]
+friendlyValidityRange = \case
+  ( TxValidityNoLowerBound,
+    TxValidityUpperBound ValidityUpperBoundInShelleyEra ttl
+    ) ->
+      -- special case: in Shelley, upper bound is TTL, and no lower bound
+      ["time to live" .= ttl]
+  (lowerBound, upperBound) ->
+    [ "validity range" .=
+        object
+          ( [ "lower bound" .=
+                case lowerBound of
+                  TxValidityNoLowerBound   -> Null
+                  TxValidityLowerBound _ s -> toJSON s
+            | isLowerBoundSupported
+            ]
+          ++
+            [ "upper bound" .=
+                case upperBound of
+                  TxValidityNoUpperBound _ -> Null
+                  TxValidityUpperBound _ s -> toJSON s
+            | isUpperBoundSupported
+            ]
+          )
+    | isLowerBoundSupported || isUpperBoundSupported
+    ]
+  where
+    era = cardanoEra @era
+    isLowerBoundSupported = isJust $ validityLowerBoundSupportedInEra era
+    isUpperBoundSupported = isJust $ validityUpperBoundSupportedInEra era
 
-friendlyTxBodyByron :: Annotated Byron.Tx ByteString -> Object
-friendlyTxBodyByron = assertObject . toJSON
-
-friendlyTxBodyShelley
-  :: Shelley.TxBody (Ledger.ShelleyEra StandardCrypto) -> Object
-friendlyTxBodyShelley body =
-  HashMap.fromList
-    [ "inputs" .= Shelley._inputs body
-    , "outputs" .= fmap friendlyTxOutShelley (Shelley._outputs body)
-    , "certificates" .= fmap textShow (Shelley._certs body)
-    , "withdrawals" .= Shelley.unWdrl (Shelley._wdrls body)
-    , "fee" .= Shelley._txfee body
-    , "time to live" .= Shelley._ttl body
-    , "update" .= fmap textShow (Shelley._txUpdate body)
-    , "metadata hash" .= fmap textShow (Shelley._mdHash body)
+friendlyWithdrawals :: TxWithdrawals era -> Value
+friendlyWithdrawals TxWithdrawalsNone = Null
+friendlyWithdrawals (TxWithdrawals _ withdrawals) =
+  array
+    [ object
+        [ "address"     .= serialiseAddress addr
+        , "network"     .= net
+        , "credential"  .= cred
+        , "amount"      .= friendlyLovelace amount
+        ]
+    | (addr@(StakeAddress net cred), amount) <- withdrawals
     ]
 
-friendlyTxBodyAllegra
-  :: ShelleyMA.TxBody (ShelleyMAEra 'Allegra StandardCrypto) -> Object
-friendlyTxBodyAllegra
-  (ShelleyMA.TxBody
-    inputs
-    outputs
-    certificates
-    (Shelley.Wdrl withdrawals)
-    txfee
-    validity
-    update
-    adHash
-    _mint -- mint is not used in Allegra, only in Mary+
-    ) =
-  HashMap.fromList
-    [ "inputs" .= inputs
-    , "outputs" .= fmap friendlyTxOutAllegra outputs
-    , "certificates" .= fmap textShow certificates
-    , "withdrawals" .= withdrawals
-    , "fee" .= txfee
-    , "validity interval" .= friendlyValidityInterval validity
-    , "update" .= fmap textShow update
-    , "auxiliary data hash" .= fmap textShow adHash
-    ]
-
-friendlyTxBodyMary
-  :: ShelleyMA.TxBody (ShelleyMAEra 'Mary StandardCrypto) -> Object
-friendlyTxBodyMary
-  (ShelleyMA.TxBody
-    inputs
-    outputs
-    certificates
-    (Shelley.Wdrl withdrawals)
-    txfee
-    validity
-    update
-    adHash
-    mint) =
-  HashMap.fromList
-    [ "inputs" .= inputs
-    , "outputs" .= fmap friendlyTxOutMary outputs
-    , "certificates" .= fmap textShow certificates
-    , "withdrawals" .= withdrawals
-    , "fee" .= txfee
-    , "validity interval" .= friendlyValidityInterval validity
-    , "update" .= fmap textShow update
-    , "auxiliary data hash" .= fmap textShow adHash
-    , "mint" .= mint
-    ]
-
-friendlyValidityInterval :: ShelleyMA.ValidityInterval -> Value
-friendlyValidityInterval
-  ShelleyMA.ValidityInterval{invalidBefore, invalidHereafter} =
-    object
-      [ "invalid before" .= invalidBefore
-      , "invalid hereafter" .= invalidHereafter
+friendlyTxOut :: TxOut era -> Value
+friendlyTxOut (TxOut addr amount) =
+  case addr of
+    AddressInEra ByronAddressInAnyEra _ ->
+      object $ ("address era" .= String "Byron") : common
+    AddressInEra (ShelleyAddressInEra _) (ShelleyAddress net cred stake) ->
+      object $
+        "address era"         .= String "Shelley"             :
+        "network"             .= net                          :
+        "payment credential"  .= cred                         :
+        "stake reference"     .= friendlyStakeReference stake :
+        common
+  where
+    common :: [(Text, Value)]
+    common =
+      [ "address" .= serialiseAddressForTxOut addr
+      , "amount"  .= friendlyTxOutValue amount
       ]
 
-friendlyTxOutShelley :: TxOut (Ledger.ShelleyEra StandardCrypto) -> Value
-friendlyTxOutShelley (TxOut addr amount) =
-  Object $ HashMap.insert "amount" (toJSON amount) $ friendlyAddress addr
-
-friendlyTxOutAllegra :: TxOut (ShelleyMAEra 'Allegra StandardCrypto) -> Value
-friendlyTxOutAllegra (TxOut addr amount) =
-  Object $ HashMap.insert "amount" (toJSON amount) $ friendlyAddress addr
-
-friendlyTxOutMary :: TxOut (ShelleyMAEra 'Mary StandardCrypto) -> Value
-friendlyTxOutMary (TxOut addr amount) =
-  Object $ HashMap.insert "amount" (toJSON amount) $ friendlyAddress addr
-
-friendlyAddress :: Addr StandardCrypto -> Object
-friendlyAddress addr =
-  HashMap.fromList $
-    case addr of
-      Addr net cred ref ->
-        [ "address" .=
-            object
-              [ "network" .= net
-              , "credential" .= cred
-              , "stake reference" .= textShow ref
-              , "Bech32" .= addressBech32
-              ]
-        ]
-      AddrBootstrap _ ->
-        ["bootstrap address" .= object ["Bech32" .= String addressBech32]]
-  where
-    addressBech32 =
-      case fromShelleyAddr @Api.ShelleyEra addr of
-        AddressInEra (ShelleyAddressInEra _) a -> serialiseAddress a
-        AddressInEra ByronAddressInAnyEra a -> serialiseAddress a
+friendlyStakeReference :: Shelley.StakeReference crypto -> Value
+friendlyStakeReference = \case
+  Shelley.StakeRefBase cred -> toJSON cred
+  Shelley.StakeRefNull -> Null
+  Shelley.StakeRefPtr ptr -> toJSON ptr
 
 assertObject :: HasCallStack => Value -> Object
 assertObject = \case
@@ -175,3 +178,47 @@ assertObject = \case
           Number{} -> "a Number"
           Object{} -> "an Object"
           String{} -> "a String"
+
+friendlyUpdateProposal :: TxUpdateProposal era -> Value
+friendlyUpdateProposal = \case
+  TxUpdateProposalNone -> Null
+  TxUpdateProposal _ p -> String $ textShow p
+
+friendlyCertificates :: TxCertificates era -> Value
+friendlyCertificates = \case
+  TxCertificatesNone  -> Null
+  TxCertificates _ cs -> toJSON $ map textShow cs
+
+friendlyFee :: TxFee era -> Value
+friendlyFee = \case
+  TxFeeImplicit _     -> "implicit"
+  TxFeeExplicit _ fee -> friendlyLovelace fee
+
+friendlyLovelace :: Lovelace -> Value
+friendlyLovelace (Lovelace value) = String $ textShow value <> " Lovelace"
+
+friendlyMintValue :: TxMintValue era -> Value
+friendlyMintValue = \case
+  TxMintNone      -> Null
+  TxMintValue _ v -> toJSON v
+
+friendlyTxOutValue :: TxOutValue era -> Value
+friendlyTxOutValue = \case
+  TxOutAdaOnly _ lovelace -> friendlyLovelace lovelace
+  TxOutValue _ multiasset -> toJSON multiasset
+
+friendlyMetadata :: TxMetadataInEra era -> Value
+friendlyMetadata = \case
+  TxMetadataNone                   -> Null
+  TxMetadataInEra _ (TxMetadata m) -> toJSON $ friendlyMetadataValue <$> m
+
+friendlyMetadataValue :: TxMetadataValue -> Value
+friendlyMetadataValue = \case
+  TxMetaNumber int  -> toJSON int
+  -- TxMetaBytes
+  TxMetaText   text -> toJSON text
+
+friendlyAuxScripts :: TxAuxScripts era -> Value
+friendlyAuxScripts = \case
+  TxAuxScriptsNone       -> Null
+  TxAuxScripts _ scripts -> toJSON scripts

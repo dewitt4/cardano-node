@@ -53,6 +53,9 @@ module Cardano.Api.Script (
 
     -- * Internal conversion functions
     toShelleyScript,
+    fromShelleyScript,
+    fromAllegraScript,
+    fromMaryScript,
     toShelleyMultiSig,
     fromShelleyMultiSig,
     toAllegraTimelock,
@@ -749,6 +752,27 @@ toShelleyScript (ScriptInEra langInEra (SimpleScript _ script)) =
       SimpleScriptV2InAllegra -> toAllegraTimelock script
       SimpleScriptV2InMary    -> toAllegraTimelock script
 
+fromShelleyScript :: Ledger.Script (ShelleyLedgerEra ShelleyEra)
+                  -> ScriptInEra ShelleyEra
+fromShelleyScript script =
+  ScriptInEra SimpleScriptV1InShelley $
+  SimpleScript SimpleScriptV1 $
+  fromShelleyMultiSig script
+
+fromAllegraScript :: Ledger.Script (ShelleyLedgerEra AllegraEra)
+                  -> ScriptInEra AllegraEra
+fromAllegraScript script =
+  ScriptInEra SimpleScriptV2InAllegra $
+  SimpleScript SimpleScriptV2 $
+  fromAllegraTimelock TimeLocksInSimpleScriptV2 script
+
+fromMaryScript  :: Ledger.Script (ShelleyLedgerEra MaryEra)
+                -> ScriptInEra MaryEra
+fromMaryScript script =
+  ScriptInEra SimpleScriptV2InMary $
+  SimpleScript SimpleScriptV2 $
+  fromAllegraTimelock TimeLocksInSimpleScriptV2 script
+
 
 -- | Conversion for the 'Shelley.MultiSig' language used by the Shelley era.
 --
@@ -1005,4 +1029,3 @@ parsePaymentKeyHash txt =
     case deserialiseFromRawBytesHex (AsHash AsPaymentKey) (Text.encodeUtf8 txt) of
       Just payKeyHash -> return payKeyHash
       Nothing -> fail $ "Error deserialising payment key hash: " <> Text.unpack txt
-
