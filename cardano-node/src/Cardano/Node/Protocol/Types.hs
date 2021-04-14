@@ -22,8 +22,9 @@ import           Ouroboros.Consensus.Block (BlockProtocol)
 import qualified Ouroboros.Consensus.Cardano as Consensus (Protocol)
 import           Ouroboros.Consensus.Node.Run (RunNode)
 
+import           Cardano.Node.Orphans ()
 import           Cardano.Tracing.Constraints (TraceConstraints)
-import           Cardano.Tracing.Metrics (HasKESMetricsData, HasKESInfo)
+import           Cardano.Tracing.Metrics (HasKESInfo, HasKESMetricsData)
 
 data Protocol = ByronProtocol
               | ShelleyProtocol
