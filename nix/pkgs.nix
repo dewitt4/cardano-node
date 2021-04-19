@@ -1,9 +1,9 @@
 # our packages overlay
-pkgs: _: with pkgs;
+final: prev: with final;
   let
     compiler = config.haskellNix.compiler or "ghc8104";
   in {
-  cardanoNodeHaskellPackages = import ./haskell.nix {
+  cardanoNodeProject = import ./haskell.nix {
     inherit compiler
       pkgs
       lib
@@ -13,7 +13,8 @@ pkgs: _: with pkgs;
       gitrev
       ;
   };
-  cardanoNodeProfiledHaskellPackages = import ./haskell.nix {
+  cardanoNodeHaskellPackages = cardanoNodeProject.hsPkgs;
+  cardanoNodeProfiledHaskellPackages = (import ./haskell.nix {
     inherit compiler
       pkgs
       lib
@@ -23,8 +24,8 @@ pkgs: _: with pkgs;
       gitrev
       ;
     profiling = true;
-  };
-  cardanoNodeEventlogHaskellPackages = import ./haskell.nix {
+  }).hsPkgs;
+  cardanoNodeEventlogHaskellPackages = (import ./haskell.nix {
     inherit compiler
       pkgs
       lib
@@ -34,8 +35,8 @@ pkgs: _: with pkgs;
       gitrev
       ;
     eventlog = true;
-  };
-  cardanoNodeAssertedHaskellPackages = import ./haskell.nix {
+  }).hsPkgs;
+  cardanoNodeAssertedHaskellPackages = (import ./haskell.nix {
     inherit config
       pkgs
       lib
@@ -52,7 +53,7 @@ pkgs: _: with pkgs;
       "ouroboros-network"
       "network-mux"
     ];
-  };
+  }).hsPkgs;
 
   #Grab the executable component of our package.
   inherit (cardanoNodeHaskellPackages.cardano-node.components.exes) cardano-node;
@@ -74,10 +75,4 @@ pkgs: _: with pkgs;
 
   clusterTests = import ./supervisord-cluster/tests { inherit pkgs; };
 
-  inherit ((haskell-nix.hackage-package {
-    name = "hlint";
-    version = "3.1.6";
-    compiler-nix-name = compiler;
-    inherit (cardanoNodeHaskellPackages) index-state;
-  }).components.exes) hlint;
 }

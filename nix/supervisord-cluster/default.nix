@@ -42,7 +42,7 @@ let
     };
 
   baseEnvConfig = pkgs.callPackage ./base-env.nix
-    { inherit (pkgs.commonLib.cardanoLib) defaultLogConfig;
+    { inherit (pkgs.commonLib) defaultLogConfig;
       inherit (profile) era;
       inherit stateDir lib;
     };

@@ -30,6 +30,7 @@ let
           enable = true;
           inherit (envConfig) topology nodeConfig nodeConfigFile port dbPrefix socketPath;
           inherit stateDir;
+          cardanoNodePkgs = pkgs;
         }
         // optionalAttrs (__hasAttr "vrfKey" envConfig)
         { inherit (envConfig) operationalCertificate kesKey vrfKey;

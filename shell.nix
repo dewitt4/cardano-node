@@ -19,19 +19,32 @@ let
   #  after entering nix-shell for cabal to use nix provided dependencies for them.
   clusterCabal = mkCluster (lib.recursiveUpdate customConfig { useCabalRun = true; });
   clusterNix   = mkCluster (lib.recursiveUpdate customConfig { useCabalRun = false; });
-  shell = cardanoNodeHaskellPackages.shellFor {
+  shell = cardanoNodeProject.shellFor {
     name = "cabal-dev-shell";
 
     inherit withHoogle;
 
     packages = ps: lib.attrValues (haskell-nix.haskellLib.selectProjectPackages ps);
 
+    tools = {
+      cabal = {
+        version = "latest";
+        inherit (cardanoNodeProject) index-state;
+      };
+      hlint = {
+        version = "latest";
+        inherit (cardanoNodeProject) index-state;
+      };
+      haskell-language-server = {
+        version = "latest";
+        inherit (cardanoNodeProject) index-state;
+      };
+    };
+
     # These programs will be available inside the nix-shell.
     buildInputs = with haskellPackages; [
-      cabal-install
       cardano-ping
       ghcid
-      hlint
       weeder
       nix
       niv
@@ -77,7 +90,6 @@ let
     stdenv.mkDerivation {
     name = "devops-shell";
     buildInputs = [
-      cabal-install
       niv
       cardano-cli
       bech32
