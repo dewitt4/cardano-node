@@ -112,6 +112,7 @@ library
                       , cardano-ledger-byron
                       , cardano-ledger-shelley-ma
                       , cardano-prelude
+                      , cardano-slotting
                       , contra-tracer
                       , cborg >= 0.2.4 && < 0.3
                       , containers
@@ -133,6 +134,7 @@ library
                       , split
                       , text
                       , time
+                      , transformers
                       , transformers-except
                       , utf8-string
                       , unordered-containers
