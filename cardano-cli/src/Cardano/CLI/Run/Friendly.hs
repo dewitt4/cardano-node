@@ -13,29 +13,25 @@ module Cardano.CLI.Run.Friendly (friendlyTxBodyBS) where
 import           Cardano.Prelude
 import qualified Prelude
 
-import           Data.Aeson (Object, ToJSON, Value (..), object, toJSON, (.=))
-import qualified Data.HashMap.Strict as HashMap
-import qualified Data.Map.Strict as Map
+import           Data.Aeson (Value (..), object, toJSON, (.=))
 import           Data.Yaml (array)
 import           Data.Yaml.Pretty (defConfig, encodePretty, setConfCompare)
 
 import           Cardano.Api as Api (AddressInEra (..),
-                   AddressTypeInEra (ByronAddressInAnyEra, ShelleyAddressInEra),
-                   CardanoEra (ShelleyEra), IsCardanoEra (cardanoEra),
-                   ShelleyBasedEra (ShelleyBasedEraAllegra, ShelleyBasedEraMary, ShelleyBasedEraShelley),
-                   ShelleyEra, TxAuxScripts (..), TxBody, TxBodyContent (..), TxCertificates (..),
-                   TxFee (..), TxMetadata (..), TxMetadataInEra (..), TxMetadataValue (..),
-                   TxMintValue (..), TxOut (..), TxOutValue (..), TxUpdateProposal (..),
-                   TxValidityLowerBound (..), TxValidityUpperBound (..), TxWithdrawals (..),
-                   ValidityUpperBoundSupportedInEra (ValidityUpperBoundInShelleyEra),
-                   auxScriptsSupportedInEra, certificatesSupportedInEra, displayError,
-                   getTransactionBodyContent, multiAssetSupportedInEra, serialiseAddress,
-                   serialiseAddressForTxOut, txMetadataSupportedInEra, updateProposalSupportedInEra,
-                   validityLowerBoundSupportedInEra, validityUpperBoundSupportedInEra,
-                   withdrawalsSupportedInEra)
+                   AddressTypeInEra (ByronAddressInAnyEra, ShelleyAddressInEra), BuildTxWith,
+                   IsCardanoEra (cardanoEra), TxAuxScripts (..), TxBody, TxBodyContent (..),
+                   TxCertificates (..), TxFee (..), TxIn, TxMetadata (..), TxMetadataInEra (..),
+                   TxMetadataValue (..), TxMintValue (..), TxOut (..), TxOutValue (..),
+                   TxUpdateProposal (..), TxValidityLowerBound (..), TxValidityUpperBound (..),
+                   TxWithdrawals (..),
+                   ValidityUpperBoundSupportedInEra (ValidityUpperBoundInShelleyEra), ViewTx,
+                   WitCtxTxIn, Witness, auxScriptsSupportedInEra, certificatesSupportedInEra,
+                   displayError, getTransactionBodyContent, multiAssetSupportedInEra,
+                   serialiseAddress, serialiseAddressForTxOut, txMetadataSupportedInEra,
+                   updateProposalSupportedInEra, validityLowerBoundSupportedInEra,
+                   validityUpperBoundSupportedInEra, withdrawalsSupportedInEra)
 import           Cardano.Api.Byron (Lovelace (..))
-import           Cardano.Api.Shelley (Address (ShelleyAddress), StakeAddress (..),
-                   TxBody (ShelleyTxBody), fromShelleyAddr, fromShelleyStakeAddr)
+import           Cardano.Api.Shelley (Address (ShelleyAddress), StakeAddress (..))
 import qualified Shelley.Spec.Ledger.API as Shelley
 
 import           Cardano.CLI.Helpers (textShow)
@@ -67,7 +63,7 @@ friendlyTxBody txbody =
       object
         $   [ "era"     .= era
             , "fee"     .= friendlyFee txFee
-            , "inputs"  .= txIns
+            , "inputs"  .= friendlyInputs txIns
             , "outputs" .= map friendlyTxOut txOuts
             ]
         ++  [ "auxiliary scripts" .= friendlyAuxScripts txAuxScripts
@@ -127,7 +123,7 @@ friendlyValidityRange = \case
     isLowerBoundSupported = isJust $ validityLowerBoundSupportedInEra era
     isUpperBoundSupported = isJust $ validityUpperBoundSupportedInEra era
 
-friendlyWithdrawals :: TxWithdrawals era -> Value
+friendlyWithdrawals :: TxWithdrawals ViewTx era -> Value
 friendlyWithdrawals TxWithdrawalsNone = Null
 friendlyWithdrawals (TxWithdrawals _ withdrawals) =
   array
@@ -137,7 +133,7 @@ friendlyWithdrawals (TxWithdrawals _ withdrawals) =
         , "credential"  .= cred
         , "amount"      .= friendlyLovelace amount
         ]
-    | (addr@(StakeAddress net cred), amount) <- withdrawals
+    | (addr@(StakeAddress net cred), amount, _) <- withdrawals
     ]
 
 friendlyTxOut :: TxOut era -> Value
@@ -165,29 +161,15 @@ friendlyStakeReference = \case
   Shelley.StakeRefNull -> Null
   Shelley.StakeRefPtr ptr -> toJSON ptr
 
-assertObject :: HasCallStack => Value -> Object
-assertObject = \case
-  Object obj -> obj
-  val -> panic $ "expected JSON Object, but got " <> typ
-    where
-      typ =
-        case val of
-          Array{}  -> "an Array"
-          Bool{}   -> "a Boolean"
-          Null     -> "Null"
-          Number{} -> "a Number"
-          Object{} -> "an Object"
-          String{} -> "a String"
-
 friendlyUpdateProposal :: TxUpdateProposal era -> Value
 friendlyUpdateProposal = \case
   TxUpdateProposalNone -> Null
   TxUpdateProposal _ p -> String $ textShow p
 
-friendlyCertificates :: TxCertificates era -> Value
+friendlyCertificates :: TxCertificates ViewTx era -> Value
 friendlyCertificates = \case
-  TxCertificatesNone  -> Null
-  TxCertificates _ cs -> toJSON $ map textShow cs
+  TxCertificatesNone    -> Null
+  TxCertificates _ cs _ -> toJSON $ map textShow cs
 
 friendlyFee :: TxFee era -> Value
 friendlyFee = \case
@@ -197,10 +179,10 @@ friendlyFee = \case
 friendlyLovelace :: Lovelace -> Value
 friendlyLovelace (Lovelace value) = String $ textShow value <> " Lovelace"
 
-friendlyMintValue :: TxMintValue era -> Value
+friendlyMintValue :: TxMintValue ViewTx era -> Value
 friendlyMintValue = \case
-  TxMintNone      -> Null
-  TxMintValue _ v -> toJSON v
+  TxMintNone        -> Null
+  TxMintValue _ v _ -> toJSON v
 
 friendlyTxOutValue :: TxOutValue era -> Value
 friendlyTxOutValue = \case
@@ -222,3 +204,6 @@ friendlyAuxScripts :: TxAuxScripts era -> Value
 friendlyAuxScripts = \case
   TxAuxScriptsNone       -> Null
   TxAuxScripts _ scripts -> toJSON scripts
+
+friendlyInputs :: [(TxIn, BuildTxWith ViewTx (Witness WitCtxTxIn era))] -> Value
+friendlyInputs = toJSON . map fst
