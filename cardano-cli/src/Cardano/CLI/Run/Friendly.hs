@@ -18,18 +18,18 @@ import           Data.Yaml (array)
 import           Data.Yaml.Pretty (defConfig, encodePretty, setConfCompare)
 
 import           Cardano.Api as Api (AddressInEra (..),
-                   AddressTypeInEra (ByronAddressInAnyEra, ShelleyAddressInEra), BuildTxWith,
+                   AddressTypeInEra (ByronAddressInAnyEra, ShelleyAddressInEra),
                    IsCardanoEra (cardanoEra), TxAuxScripts (..), TxBody, TxBodyContent (..),
                    TxCertificates (..), TxFee (..), TxIn, TxMetadata (..), TxMetadataInEra (..),
                    TxMetadataValue (..), TxMintValue (..), TxOut (..), TxOutValue (..),
                    TxUpdateProposal (..), TxValidityLowerBound (..), TxValidityUpperBound (..),
                    TxWithdrawals (..),
                    ValidityUpperBoundSupportedInEra (ValidityUpperBoundInShelleyEra), ViewTx,
-                   WitCtxTxIn, Witness, auxScriptsSupportedInEra, certificatesSupportedInEra,
-                   displayError, getTransactionBodyContent, multiAssetSupportedInEra,
-                   serialiseAddress, serialiseAddressForTxOut, txMetadataSupportedInEra,
-                   updateProposalSupportedInEra, validityLowerBoundSupportedInEra,
-                   validityUpperBoundSupportedInEra, withdrawalsSupportedInEra)
+                   auxScriptsSupportedInEra, certificatesSupportedInEra, displayError,
+                   getTransactionBodyContent, multiAssetSupportedInEra, serialiseAddress,
+                   serialiseAddressForTxOut, txMetadataSupportedInEra, updateProposalSupportedInEra,
+                   validityLowerBoundSupportedInEra, validityUpperBoundSupportedInEra,
+                   withdrawalsSupportedInEra)
 import           Cardano.Api.Byron (Lovelace (..))
 import           Cardano.Api.Shelley (Address (ShelleyAddress), StakeAddress (..))
 import qualified Shelley.Spec.Ledger.API as Shelley
@@ -196,14 +196,18 @@ friendlyMetadata = \case
 
 friendlyMetadataValue :: TxMetadataValue -> Value
 friendlyMetadataValue = \case
-  TxMetaNumber int  -> toJSON int
-  -- TxMetaBytes
-  TxMetaText   text -> toJSON text
+  TxMetaNumber int   -> toJSON int
+  TxMetaBytes  bytes -> String $ textShow bytes
+  TxMetaList   lst   -> array $ map friendlyMetadataValue lst
+  TxMetaMap    m     ->
+    array
+      [array [friendlyMetadataValue k, friendlyMetadataValue v] | (k, v) <- m]
+  TxMetaText   text  -> toJSON text
 
 friendlyAuxScripts :: TxAuxScripts era -> Value
 friendlyAuxScripts = \case
   TxAuxScriptsNone       -> Null
   TxAuxScripts _ scripts -> toJSON scripts
 
-friendlyInputs :: [(TxIn, BuildTxWith ViewTx (Witness WitCtxTxIn era))] -> Value
+friendlyInputs :: [(TxIn, build)] -> Value
 friendlyInputs = toJSON . map fst
